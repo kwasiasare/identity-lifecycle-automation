@@ -39,17 +39,30 @@ class Settings:
     graph_beta_url: str = "https://graph.microsoft.com/beta"
     graph_scope: str = "https://graph.microsoft.com/.default"
     graph_request_timeout_seconds: float = 30.0
+    # Bounded retry budget for 429/503 responses (honoring Retry-After) —
+    # see GraphClient._request. Applied per HTTP call, not per flow.
+    graph_max_retries: int = 4
 
     # Tenant / directory defaults
     default_domain: str = "contoso.onmicrosoft.com"
     default_usage_location: str = "GB"
     joiner_default_password_length: int = 16
 
+    # Dedicated service/no-reply mailbox UPN used to send the joiner welcome
+    # email. Must NOT be the just-created user — that mailbox isn't
+    # provisioned yet and sendMail-as-self fails with
+    # MailboxNotEnabledForRESTAPI. Empty string disables welcome mail (logged
+    # as a failed step, never aborts the joiner flow).
+    welcome_mail_sender: str = ""
+
     # Storage (queue intake + idempotency dedupe table)
     storage_connection_setting: str = "AzureWebJobsStorage"
     events_queue_name: str = "identity-events"
     inbound_container_name: str = "identity-events-inbound"
     idempotency_table_name: str = "IdempotencyLedger"
+    # Durable leaver deferred-deletion schedule (PartitionKey="LeaverSchedule")
+    # — see identity_lifecycle/leaver_schedule.py. Read by deferred_deletion_sweep.
+    leaver_schedule_table_name: str = "LeaverSchedule"
 
     # Log Analytics custom table (Logs Ingestion API / DCR)
     logs_ingestion_endpoint: str = ""  # Data Collection Endpoint URL
@@ -70,8 +83,10 @@ class Settings:
         return cls(
             graph_base_url=_env("GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0"),
             graph_beta_url=_env("GRAPH_BETA_URL", "https://graph.microsoft.com/beta"),
+            graph_max_retries=int(_env("GRAPH_MAX_RETRIES", "4")),
             default_domain=_env("DEFAULT_DOMAIN", "contoso.onmicrosoft.com"),
             default_usage_location=_env("DEFAULT_USAGE_LOCATION", "GB"),
+            welcome_mail_sender=_env("WELCOME_MAIL_SENDER", ""),
             storage_connection_setting=_env(
                 "STORAGE_CONNECTION_SETTING", "AzureWebJobsStorage"
             ),
@@ -80,6 +95,7 @@ class Settings:
                 "INBOUND_CONTAINER_NAME", "identity-events-inbound"
             ),
             idempotency_table_name=_env("IDEMPOTENCY_TABLE_NAME", "IdempotencyLedger"),
+            leaver_schedule_table_name=_env("LEAVER_SCHEDULE_TABLE_NAME", "LeaverSchedule"),
             logs_ingestion_endpoint=_env("LOGS_INGESTION_ENDPOINT"),
             logs_dcr_immutable_id=_env("LOGS_DCR_IMMUTABLE_ID"),
             logs_stream_name=_env(
