@@ -1,0 +1,2 @@
+event_type,user_principal_name,new_department,new_job_title,new_manager_upn,effective_date
+mover,priya.sharma@contoso.onmicrosoft.com,Sales,Solutions Engineer,manager.sales@contoso.onmicrosoft.com,2026-09-01

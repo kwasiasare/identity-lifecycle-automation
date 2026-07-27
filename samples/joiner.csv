@@ -1,0 +1,3 @@
+event_type,user_principal_name,display_name,first_name,last_name,department,job_title,manager_upn,employee_id,personal_email,start_date
+joiner,priya.sharma@contoso.onmicrosoft.com,Priya Sharma,Priya,Sharma,Engineering,Software Engineer,manager.eng@contoso.onmicrosoft.com,E10042,priya.sharma@example.com,2026-08-03
+joiner,tom.okafor@contoso.onmicrosoft.com,Tom Okafor,Tom,Okafor,Sales,Account Executive,manager.sales@contoso.onmicrosoft.com,E10043,tom.okafor@example.com,2026-08-10

@@ -1,0 +1,9 @@
+{
+  "event_type": "mover",
+  "user_principal_name": "priya.sharma@contoso.onmicrosoft.com",
+  "new_department": "Sales",
+  "new_job_title": "Solutions Engineer",
+  "new_manager_upn": "manager.sales@contoso.onmicrosoft.com",
+  "effective_date": "2026-09-01",
+  "source": "hris-webhook-simulation"
+}

@@ -1,0 +1,7 @@
+{
+  "event_type": "leaver",
+  "user_principal_name": "tom.okafor@contoso.onmicrosoft.com",
+  "last_day_of_work": "2026-10-15",
+  "employee_id": "E10043",
+  "source": "hris-webhook-simulation"
+}

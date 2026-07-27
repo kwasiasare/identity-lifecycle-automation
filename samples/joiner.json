@@ -1,0 +1,14 @@
+{
+  "event_type": "joiner",
+  "user_principal_name": "priya.sharma@contoso.onmicrosoft.com",
+  "display_name": "Priya Sharma",
+  "first_name": "Priya",
+  "last_name": "Sharma",
+  "department": "Engineering",
+  "job_title": "Software Engineer",
+  "manager_upn": "manager.eng@contoso.onmicrosoft.com",
+  "employee_id": "E10042",
+  "personal_email": "priya.sharma@example.com",
+  "start_date": "2026-08-03",
+  "source": "hris-webhook-simulation"
+}
