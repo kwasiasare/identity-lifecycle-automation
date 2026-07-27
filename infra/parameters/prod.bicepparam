@@ -8,3 +8,4 @@ param leaverDeferredDeleteDays = 30
 // dryRun stays true until the deferred-deletion sweep has real delete logic
 // AND has been validated end-to-end on dev with Kwasi's explicit approval.
 param dryRun = true
+param welcomeMailSender = 'no-reply@yourtenant.onmicrosoft.com' // TODO: replace with the production tenant's dedicated no-reply mailbox UPN

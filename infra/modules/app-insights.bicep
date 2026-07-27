@@ -26,4 +26,8 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 }
 
 output connectionString string = appInsights.properties.ConnectionString
-output instrumentationKey string = appInsights.properties.InstrumentationKey
+// instrumentationKey is deliberately NOT output: it's the legacy/deprecated
+// auth mechanism (Microsoft is retiring instrumentation-key-based ingestion),
+// function-app.bicep only ever needed the connection string, and every extra
+// credential-shaped output is one more thing that could be misused if a
+// deployment's outputs are ever read by something other than this template.

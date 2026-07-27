@@ -71,6 +71,11 @@ resource idempotencyTable 'Microsoft.Storage/storageAccounts/tableServices/table
 
 output id string = storageAccount.id
 output name string = storageAccount.name
-@description('Deploy-time-computed connection string. Never written to source control — Bicep resolves listKeys() at deployment time and passes it directly into the Function App module as a @secure() param.')
-#disable-next-line outputs-should-not-contain-secrets
-output connectionString string = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
+// Deliberately NOT outputting a connection string here (previously behind a
+// linter-suppressed `outputs-should-not-contain-secrets`). Module outputs
+// land in the deployment's activity log/history, so a secret output is a
+// secret at rest wherever that history is retained — even though it's never
+// written to source control. The account name is enough: function-app.bicep
+// builds the connection string itself at the point of use via
+// listKeys(resourceId(...)), scoped to exactly that one @secure() variable,
+// never surfaced as a module output.

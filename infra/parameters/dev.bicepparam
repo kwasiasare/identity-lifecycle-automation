@@ -6,3 +6,4 @@ param defaultDomain = 'yourtenant.onmicrosoft.com' // TODO: replace with the EP-
 param defaultUsageLocation = 'GB'
 param leaverDeferredDeleteDays = 30
 param dryRun = true
+param welcomeMailSender = 'no-reply@yourtenant.onmicrosoft.com' // TODO: replace with the dev tenant's dedicated no-reply mailbox UPN

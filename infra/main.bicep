@@ -39,6 +39,9 @@ param leaverDeferredDeleteDays int = 30
 @description('When true, destructive/production-affecting behaviour stays disabled regardless of other settings. Defaults true in both environments until the deferred-deletion sweep is implemented past its v1 stub.')
 param dryRun bool = true
 
+@description('Dedicated service/no-reply mailbox UPN used to send the joiner welcome email. Empty disables welcome mail (logged as a failed step, never aborts the joiner flow).')
+param welcomeMailSender string = ''
+
 @description('Log Analytics retention in days.')
 param logAnalyticsRetentionInDays int = environmentName == 'prod' ? 90 : 30
 
@@ -110,7 +113,7 @@ module functionApp 'modules/function-app.bicep' = {
     environmentName: environmentName
     managedIdentityId: identity.outputs.id
     managedIdentityClientId: identity.outputs.clientId
-    storageConnectionString: storage.outputs.connectionString
+    storageAccountName: storage.outputs.name
     appInsightsConnectionString: appInsights.outputs.connectionString
     logsIngestionEndpoint: logAnalytics.outputs.dceEndpoint
     dcrImmutableId: logAnalytics.outputs.dcrImmutableId
@@ -119,6 +122,7 @@ module functionApp 'modules/function-app.bicep' = {
     defaultUsageLocation: defaultUsageLocation
     leaverDeferredDeleteDays: leaverDeferredDeleteDays
     dryRun: dryRun
+    welcomeMailSender: welcomeMailSender
   }
 }
 

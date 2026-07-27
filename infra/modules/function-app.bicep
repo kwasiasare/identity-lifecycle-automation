@@ -1,10 +1,12 @@
 // Consumption-plan (Y1) Linux Python Function App running the joiner/mover/
 // leaver processor. Graph and Log Analytics auth are entirely managed-identity
 // based (no client secrets anywhere). AzureWebJobsStorage still uses a
-// deploy-time-resolved connection string (see infra/README.md for why —
-// short version: identity-based storage triggers have real limitations on
-// the Consumption plan today) but that value is never written to source
-// control; Bicep resolves it from listKeys() at deployment time only.
+// connection string (see infra/README.md for why — short version:
+// identity-based storage triggers have real limitations on the Consumption
+// plan today) but that value is never accepted or emitted as a module
+// parameter/output: this module takes only the storage account *name* and
+// resolves listKeys() itself, right at the point the app setting is built —
+// the narrowest possible blast radius for that secret within the template.
 @description('Function App name.')
 param functionAppName string
 
@@ -24,9 +26,8 @@ param managedIdentityId string
 @description('Client ID of the user-assigned managed identity (so DefaultAzureCredential picks the right identity).')
 param managedIdentityClientId string
 
-@description('Storage account connection string (deploy-time only, never committed).')
-@secure()
-param storageConnectionString string
+@description('Name of the storage account (same resource group) backing AzureWebJobsStorage — the connection string is derived here via listKeys(), never passed in or output.')
+param storageAccountName string
 
 @description('Application Insights connection string.')
 param appInsightsConnectionString string
@@ -51,6 +52,15 @@ param leaverDeferredDeleteDays int = 30
 
 @description('When true, destructive/production-affecting behaviour stays disabled regardless of other settings.')
 param dryRun bool = true
+
+@description('Dedicated service/no-reply mailbox UPN used to send the joiner welcome email — never the just-created user itself (see identity_lifecycle/flows/joiner.py).')
+param welcomeMailSender string = ''
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+  name: storageAccountName
+}
+
+var storageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
 
 resource hostingPlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name: '${functionAppName}-plan'
@@ -99,10 +109,12 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         { name: 'EVENTS_QUEUE_NAME', value: 'identity-events' }
         { name: 'INBOUND_CONTAINER_NAME', value: 'identity-events-inbound' }
         { name: 'IDEMPOTENCY_TABLE_NAME', value: 'IdempotencyLedger' }
+        { name: 'LEAVER_SCHEDULE_TABLE_NAME', value: 'LeaverSchedule' }
         { name: 'LOGS_INGESTION_ENDPOINT', value: logsIngestionEndpoint }
         { name: 'LOGS_DCR_IMMUTABLE_ID', value: dcrImmutableId }
         { name: 'LOGS_STREAM_NAME', value: logsStreamName }
         { name: 'LEAVER_DEFERRED_DELETE_DAYS', value: string(leaverDeferredDeleteDays) }
+        { name: 'WELCOME_MAIL_SENDER', value: welcomeMailSender }
         { name: 'DRY_RUN', value: string(dryRun) }
         { name: 'ENVIRONMENT_NAME', value: environmentName }
       ]
