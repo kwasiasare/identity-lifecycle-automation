@@ -1,0 +1,146 @@
+name: Deploy
+
+# Auth: GitHub OIDC -> Entra federated credential (no client secrets stored in
+# GitHub). Set up per README.md "EP-7: OIDC federation" — one federated
+# credential per environment (dev, production) scoped to this repo + branch.
+#
+# Required repo/environment configuration (vars, not secrets — these are
+# identifiers, not credentials):
+#   AZURE_CLIENT_ID        - app registration (user-assigned managed identity
+#                             or app registration) client ID used for OIDC
+#   AZURE_TENANT_ID         - Entra tenant ID
+#   AZURE_SUBSCRIPTION_ID   - target subscription ID
+#   AZURE_RESOURCE_GROUP    - resource group the stack deploys into
+#
+# Nothing here runs until the repo is pushed to GitHub and these are
+# configured — see the "Remaining TODOs" section of the build report / README.
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "infra/**"
+      - "function_app.py"
+      - "src/**"
+      - ".github/workflows/deploy.yml"
+  push:
+    branches: [dev, master]
+    paths:
+      - "infra/**"
+      - "function_app.py"
+      - "src/**"
+      - "host.json"
+      - "requirements.txt"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  id-token: write # required for OIDC azure/login
+  contents: read
+
+jobs:
+  what-if:
+    name: Bicep what-if (dev)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if against dev
+        run: |
+          az deployment group what-if \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/dev.bicepparam
+
+  deploy-dev:
+    name: Deploy infra + code (dev)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy infrastructure
+        id: infra
+        run: |
+          az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/dev.bicepparam \
+            --query "properties.outputs.functionAppName.value" -o tsv > function_app_name.txt
+          echo "function_app_name=$(cat function_app_name.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Deploy function code
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.infra.outputs.function_app_name }}
+          package: "."
+          scm-do-build-during-deployment: true
+
+  deploy-prod:
+    name: Deploy infra + code (production)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    # The "production" GitHub Environment must have required-reviewer
+    # protection configured so this job pauses for manual approval —
+    # this is the "prod job gated on master" control, in addition to the
+    # dev->test->approve->prod branch workflow itself.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if against production (recorded in logs before apply)
+        run: |
+          az deployment group what-if \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/prod.bicepparam
+
+      - name: Deploy infrastructure
+        id: infra
+        run: |
+          az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/prod.bicepparam \
+            --query "properties.outputs.functionAppName.value" -o tsv > function_app_name.txt
+          echo "function_app_name=$(cat function_app_name.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Deploy function code
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.infra.outputs.function_app_name }}
+          package: "."
+          scm-do-build-during-deployment: true
