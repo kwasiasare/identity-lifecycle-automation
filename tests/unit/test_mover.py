@@ -107,6 +107,32 @@ def test_mover_logs_recertification_note(fake_graph, audit, settings):
     assert "Sales" in note_step.detail
 
 
+def test_mover_reconciliation_adds_before_it_removes(fake_graph, audit, settings):
+    """Regression test: alphabetically, 'grp-engineering-all' (a removal, out
+    of scope for Sales) sorts BEFORE 'grp-sales-all' (an addition, in scope
+    for Sales) — the old accidental-alphabetical-order bug would have issued
+    the removal first. Every addition must be issued before any removal,
+    regardless of group name ordering."""
+    _seed_all_groups(fake_graph)
+    user = fake_graph.seed_user("mover@contoso.onmicrosoft.com", department="Engineering")
+    eng_group = fake_graph.groups["grp-engineering-all"]
+    eng_lic = fake_graph.groups["lic-m365-e5"]
+    fake_graph.ensure_group_member(eng_group["id"], user["id"])
+    fake_graph.ensure_group_member(eng_lic["id"], user["id"])
+    fake_graph.mutation_calls.clear()
+
+    event = _mover_event(new_department="Sales")
+    run_mover(event, fake_graph, audit, settings)
+
+    add_indices = [i for i, m in enumerate(fake_graph.mutation_calls) if m.startswith("add_member:")]
+    remove_indices = [i for i, m in enumerate(fake_graph.mutation_calls) if m.startswith("remove_member:")]
+    assert add_indices, "expected at least one add_member mutation"
+    assert remove_indices, "expected at least one remove_member mutation"
+    assert max(add_indices) < min(remove_indices), (
+        f"an addition happened after a removal: {fake_graph.mutation_calls}"
+    )
+
+
 def test_mover_replay_is_fully_idempotent(fake_graph, audit, settings):
     _seed_all_groups(fake_graph)
     fake_graph.seed_user("mover@contoso.onmicrosoft.com")

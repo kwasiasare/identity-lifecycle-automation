@@ -6,7 +6,8 @@ Steps:
      idempotent (revoking an already-revoked session set is a harmless no-op
      server-side), so this is always called and always logged `success`.
   3. Remove the user from every automation-managed group (same reconciliation
-     approach as the mover flow, with an empty desired set).
+     approach as the mover flow, with an empty desired set) — one memberOf
+     read for the whole event, reused for every managed group.
   4. Retire every Intune-managed device owned by the user (idempotent — skips
      devices already pending/retired).
   5. Flag the mailbox for shared-mailbox conversion. Exchange Online mailbox
@@ -14,11 +15,15 @@ Steps:
      in the same way directory objects are — this is deliberately isolated to
      a single EXO PowerShell module (exo/Convert-LeaverMailbox.psm1) run as a
      documented manual step or from an Azure Automation runbook in v1. This
-     flow only records the audit intent; it never calls EXO itself.
+     flow only records the audit intent; it never calls EXO itself. See the
+     README "Operational runbook" section for the KQL query that lists
+     leavers still awaiting conversion.
   6. Schedule a 30-day (configurable) deferred deletion. This flow *never*
-     deletes the account itself — it only computes and audits the deletion
-     due-date. Actual deletion is a separate, explicitly-gated timer function
-     (see function_app.py: `deferred_deletion_sweep`) that requires
+     deletes the account itself — it only computes the deletion due-date and
+     persists it durably to the Table Storage leaver schedule ledger (see
+     identity_lifecycle/leaver_schedule.py), which the deferred_deletion_sweep
+     timer function (function_app.py) reads back and reports against. Actual
+     deletion is a separate, explicitly-gated function that requires
      `settings.dry_run is False` and an explicit confirmation before it would
      ever call Graph's delete endpoint — a deliberate safety rail against a
      bad HR feed silently deleting accounts.
@@ -32,6 +37,7 @@ from identity_lifecycle.audit import AuditLogger
 from identity_lifecycle.config import Settings, all_managed_group_names
 from identity_lifecycle.flows.base import FlowOutcome, StepResult
 from identity_lifecycle.graph_client import GraphClient
+from identity_lifecycle.leaver_schedule import InMemoryLeaverScheduleStore, LeaverScheduleStore
 from identity_lifecycle.models import UserEvent
 
 
@@ -45,7 +51,14 @@ def run_leaver(
     graph: GraphClient,
     audit: AuditLogger,
     settings: Settings,
+    leaver_schedule: LeaverScheduleStore | None = None,
 ) -> FlowOutcome:
+    # Defaults to a throwaway in-memory store rather than making the param
+    # mandatory, so existing callers/tests that don't care about durable
+    # scheduling still work — function_app.py always passes a real store.
+    if leaver_schedule is None:
+        leaver_schedule = InMemoryLeaverScheduleStore()
+
     outcome = FlowOutcome(
         event_type=event.event_type.value,
         correlation_id=event.correlation_id,
@@ -76,7 +89,7 @@ def run_leaver(
     _remove_all_group_memberships(event, graph, audit, outcome, settings, user_id)
     _retire_devices(event, graph, audit, outcome, user_id)
     _flag_mailbox_conversion(event, audit, outcome)
-    _schedule_deferred_deletion(event, audit, outcome, settings)
+    _schedule_deferred_deletion(event, audit, outcome, settings, leaver_schedule)
 
     return outcome
 
@@ -126,6 +139,10 @@ def _remove_all_group_memberships(
     settings: Settings,
     user_id: str,
 ) -> None:
+    # One memberOf read for the whole event, reused for every managed group
+    # below instead of one Graph call per candidate group.
+    member_of_ids = graph.get_member_of_group_ids(user_id)
+
     for group_name in sorted(all_managed_group_names(settings)):
         group = graph.get_group_by_name(group_name)
         if group is None:
@@ -136,17 +153,28 @@ def _remove_all_group_memberships(
                 detail="group not found in directory",
             )
             continue
-        changed = graph.ensure_group_member_removed(group["id"], user_id)
-        result = StepResult.SUCCESS if changed else StepResult.SKIPPED
-        detail = "removed" if changed else "was not a member"
-        outcome.add("remove_group_member", group_name, result, detail=detail)
+        group_id = group["id"]
+        if group_id not in member_of_ids:
+            outcome.add("remove_group_member", group_name, StepResult.SKIPPED, detail="was not a member")
+            audit.record(
+                correlation_id=event.correlation_id,
+                event_type=outcome.event_type,
+                action="remove_group_member",
+                target=group_name,
+                result="skipped",
+                detail="was not a member",
+            )
+            continue
+        graph.ensure_group_member_removed(group_id, user_id, member_of_ids=member_of_ids)
+        member_of_ids = member_of_ids - {group_id}
+        outcome.add("remove_group_member", group_name, StepResult.SUCCESS, detail="removed")
         audit.record(
             correlation_id=event.correlation_id,
             event_type=outcome.event_type,
             action="remove_group_member",
             target=group_name,
-            result=result.value,
-            detail=detail,
+            result="success",
+            detail="removed",
         )
 
 
@@ -201,13 +229,20 @@ def _flag_mailbox_conversion(event: UserEvent, audit: AuditLogger, outcome: Flow
 
 
 def _schedule_deferred_deletion(
-    event: UserEvent, audit: AuditLogger, outcome: FlowOutcome, settings: Settings
+    event: UserEvent,
+    audit: AuditLogger,
+    outcome: FlowOutcome,
+    settings: Settings,
+    leaver_schedule: LeaverScheduleStore,
 ) -> None:
     due_date = compute_deletion_due_date(event, settings)
     detail = (
         f"account eligible for deletion on/after {due_date.isoformat()} "
         f"({settings.leaver_deferred_delete_days}-day deferred deletion policy); "
         "actual deletion performed only by the gated deferred_deletion_sweep timer function"
+    )
+    leaver_schedule.schedule(
+        event.user_principal_name, event.correlation_id, due_date, detail=detail
     )
     outcome.add(
         "schedule_deferred_deletion", event.user_principal_name, StepResult.INFO, detail=detail

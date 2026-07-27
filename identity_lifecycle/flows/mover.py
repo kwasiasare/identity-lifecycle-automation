@@ -9,6 +9,12 @@ are left untouched. This makes the flow idempotent and safe to replay: running
 it twice in a row with the same event computes the same target state and the
 second run reports every group step as `skipped`.
 
+Reconciliation deliberately performs every addition before any removal (never
+interleaved alphabetically by group name) — the user should never pass
+through a moment where they've lost their old department's access before
+gaining the new one, even though additions and removals happen as separate
+Graph calls within the same flow run.
+
 Every group add/remove and attribute change is logged individually, plus one
 extra "access_recertification_note" audit record summarising the change —
 this is the artifact a manager/security reviewer would check during a periodic
@@ -137,11 +143,6 @@ def _reconcile_groups(
         return
 
     mapping = resolve_department_mapping(settings, event.new_department)
-    desired_names = set(mapping.security_groups) if mapping else set()
-    if mapping and mapping.license_group:
-        desired_names.add(mapping.license_group)
-
-    managed_names = all_managed_group_names(settings)
     if mapping is None:
         outcome.add(
             "reconcile_groups",
@@ -159,6 +160,16 @@ def _reconcile_groups(
         )
         return
 
+    desired_names = set(mapping.security_groups)
+    if mapping.license_group:
+        desired_names.add(mapping.license_group)
+    managed_names = all_managed_group_names(settings)
+
+    # One memberOf read for the whole event, reused for every managed group
+    # below instead of one Graph call per candidate group.
+    member_of_ids = graph.get_member_of_group_ids(user_id)
+
+    resolved_groups: dict[str, dict] = {}
     for group_name in sorted(managed_names):
         group = graph.get_group_by_name(group_name)
         if group is None:
@@ -169,19 +180,40 @@ def _reconcile_groups(
                 detail="group not found in directory",
             )
             continue
-        group_id = group["id"]
-        should_be_member = group_name in desired_names
-        is_member = graph.is_group_member(group_id, user_id)
+        resolved_groups[group_name] = group
 
-        if should_be_member and not is_member:
-            graph.ensure_group_member(group_id, user_id)
-            result, detail = StepResult.SUCCESS, "added — now in scope for this department"
-        elif not should_be_member and is_member:
-            graph.ensure_group_member_removed(group_id, user_id)
-            result, detail = StepResult.SUCCESS, "removed — out of scope for new department"
-        else:
+    # Additions before removals, always — regardless of alphabetical group
+    # name order — so the user is never briefly left with neither the old
+    # nor the new department's access mid-reconciliation.
+    to_add = [name for name in resolved_groups if name in desired_names]
+    to_remove = [name for name in resolved_groups if name not in desired_names]
+
+    for group_name in to_add:
+        group_id = resolved_groups[group_name]["id"]
+        if group_id in member_of_ids:
             result, detail = StepResult.SKIPPED, "already in desired state"
+        else:
+            graph.ensure_group_member(group_id, user_id, member_of_ids=member_of_ids)
+            member_of_ids = member_of_ids | {group_id}
+            result, detail = StepResult.SUCCESS, "added — now in scope for this department"
+        outcome.add("reconcile_group_member", group_name, result, detail=detail)
+        audit.record(
+            correlation_id=event.correlation_id,
+            event_type=outcome.event_type,
+            action="reconcile_group_member",
+            target=group_name,
+            result=result.value,
+            detail=detail,
+        )
 
+    for group_name in to_remove:
+        group_id = resolved_groups[group_name]["id"]
+        if group_id not in member_of_ids:
+            result, detail = StepResult.SKIPPED, "already in desired state"
+        else:
+            graph.ensure_group_member_removed(group_id, user_id, member_of_ids=member_of_ids)
+            member_of_ids = member_of_ids - {group_id}
+            result, detail = StepResult.SUCCESS, "removed — out of scope for new department"
         outcome.add("reconcile_group_member", group_name, result, detail=detail)
         audit.record(
             correlation_id=event.correlation_id,

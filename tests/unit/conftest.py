@@ -15,6 +15,7 @@ def settings(tmp_path) -> Settings:
     return Settings(
         local_audit_log_path=str(tmp_path / "audit-fallback.log"),
         department_mappings=default_department_mappings(),
+        welcome_mail_sender="no-reply@contoso.onmicrosoft.com",
     )
 
 

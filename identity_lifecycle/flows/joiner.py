@@ -2,14 +2,23 @@
 
 Steps (each individually idempotent via GraphClient's check-before-write):
   1. Create the user if it doesn't already exist (by UPN).
-  2. Set manager reference, if provided.
-  3. Add to department security group(s) and the group-based-licensing group.
-  4. Issue a Temporary Access Pass for first sign-in (passwordless preferred).
-  5. Send a welcome email with sign-in instructions to the new hire's personal
-     address (if supplied) — this is the only step that is *not* naturally
-     idempotent at the Graph layer (Graph has no "has this mail already been
-     sent" check), so it is gated on step 1's `created` flag: welcome mail is
-     only sent the run that actually created the user, never on replay.
+  2. Reconcile displayName/jobTitle/department/employeeId to the event's
+     values — runs every time, including replays, so a replay after a
+     partial failure (or a corrected re-send of the same event) self-heals
+     any attribute drift instead of only ever setting them at creation time.
+  3. Set manager reference, if provided.
+  4. Add to department security group(s) and the group-based-licensing group.
+  5. Issue a Temporary Access Pass for first sign-in (passwordless preferred).
+  6. Send a welcome email with sign-in instructions to the new hire's personal
+     address (if supplied), sent from a dedicated no-reply/service mailbox
+     (`settings.welcome_mail_sender`) — never from the just-created user's own
+     mailbox, which isn't provisioned yet and would fail sendMail with
+     MailboxNotEnabledForRESTAPI. This is the only step that is *not*
+     naturally idempotent at the Graph layer (Graph has no "has this mail
+     already been sent" check), so it is gated on step 1's `created` flag:
+     welcome mail is only sent the run that actually created the user, never
+     on replay. A mail-send failure degrades this step to `failed` — it never
+     aborts the rest of the flow, which has already completed by this point.
 
 Re-sending the same joiner event is safe: on a second run every step observes
 the target state already holds and reports `skipped`.
@@ -17,14 +26,24 @@ the target state already holds and reports `skipped`.
 
 from __future__ import annotations
 
+import html
+import re
 import secrets
 import string
+from typing import Any
 
 from identity_lifecycle.audit import AuditLogger
 from identity_lifecycle.config import DepartmentMapping, Settings
-from identity_lifecycle.flows.base import FlowOutcome, StepResult
+from identity_lifecycle.flows.base import FlowOutcome, StepResult, is_transient_graph_failure
 from identity_lifecycle.graph_client import GraphClient
 from identity_lifecycle.models import UserEvent
+
+# mailNickname must be a safe, narrow character set — Graph accepts a wider
+# range but this keeps the value predictable and avoids surprises downstream
+# (e.g. in systems that treat mailNickname as a filesystem-safe or URL-safe
+# token). Anything outside this set is stripped, not rejected, so a UPN local
+# part with e.g. an apostrophe still produces a usable nickname.
+_MAIL_NICKNAME_DISALLOWED = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def generate_temp_password(length: int = 16) -> str:
@@ -42,7 +61,9 @@ def generate_temp_password(length: int = 16) -> str:
 
 
 def _mail_nickname(upn: str) -> str:
-    return upn.split("@", 1)[0]
+    local_part = upn.split("@", 1)[0]
+    sanitized = _MAIL_NICKNAME_DISALLOWED.sub("", local_part)
+    return sanitized or "user"
 
 
 def resolve_department_mapping(
@@ -102,12 +123,13 @@ def run_joiner(
         user_id=user_id,
     )
 
+    _ensure_attributes_current(event, graph, audit, outcome, user_id, display_name)
     _set_manager(event, graph, audit, outcome, user_id)
     _apply_group_memberships(event, graph, audit, outcome, settings, user_id)
     tap_code = _issue_temporary_access_pass(event, graph, audit, outcome, user_id)
 
     if created:
-        _send_welcome_mail(event, graph, audit, outcome, user_id, tap_code)
+        _send_welcome_mail(event, graph, audit, outcome, tap_code, settings)
     else:
         outcome.add(
             "send_welcome_mail",
@@ -125,6 +147,41 @@ def run_joiner(
         )
 
     return outcome
+
+
+def _ensure_attributes_current(
+    event: UserEvent,
+    graph: GraphClient,
+    audit: AuditLogger,
+    outcome: FlowOutcome,
+    user_id: str,
+    display_name: str,
+) -> None:
+    """Reconciles displayName/jobTitle/department/employeeId every run
+    (including replays) — called unconditionally after ensure_user_exists so
+    a replayed event self-heals attribute drift rather than only ever setting
+    these at initial creation time."""
+    desired: dict[str, Any] = {"displayName": display_name}
+    if event.job_title:
+        desired["jobTitle"] = event.job_title
+    if event.department:
+        desired["department"] = event.department
+    if event.employee_id:
+        desired["employeeId"] = event.employee_id
+
+    changed = graph.ensure_user_attributes(user_id, desired)
+    result = StepResult.SUCCESS if changed else StepResult.SKIPPED
+    detail = f"updated attributes: {sorted(desired)}" if changed else "attributes already current"
+    outcome.add("update_attributes", event.user_principal_name, result, detail=detail)
+    audit.record(
+        correlation_id=event.correlation_id,
+        event_type=outcome.event_type,
+        action="update_attributes",
+        target=event.user_principal_name,
+        result=result.value,
+        detail=detail,
+        desired=desired,
+    )
 
 
 def _set_manager(
@@ -185,6 +242,10 @@ def _apply_group_memberships(
     if mapping.license_group:
         target_group_names.append(mapping.license_group)
 
+    # One memberOf read for the whole event, reused for every candidate group
+    # below — see GraphClient.get_member_of_group_ids docstring.
+    member_of_ids = graph.get_member_of_group_ids(user_id)
+
     for group_name in target_group_names:
         group = graph.get_group_by_name(group_name)
         if group is None:
@@ -203,7 +264,9 @@ def _apply_group_memberships(
                 detail="group not found in directory",
             )
             continue
-        changed = graph.ensure_group_member(group["id"], user_id)
+        changed = graph.ensure_group_member(group["id"], user_id, member_of_ids=member_of_ids)
+        if changed:
+            member_of_ids = member_of_ids | {group["id"]}
         result = StepResult.SUCCESS if changed else StepResult.SKIPPED
         detail = "added to group" if changed else "already a member"
         outcome.add("add_group_member", group_name, result, detail=detail)
@@ -226,7 +289,7 @@ def _issue_temporary_access_pass(
             "issue_temporary_access_pass",
             event.user_principal_name,
             StepResult.SKIPPED,
-            detail="a temporary access pass already exists",
+            detail="a usable temporary access pass already exists",
         )
         audit.record(
             correlation_id=event.correlation_id,
@@ -234,7 +297,7 @@ def _issue_temporary_access_pass(
             action="issue_temporary_access_pass",
             target=event.user_principal_name,
             result="skipped",
-            detail="a temporary access pass already exists",
+            detail="a usable temporary access pass already exists",
         )
         return None
     outcome.add(
@@ -259,8 +322,8 @@ def _send_welcome_mail(
     graph: GraphClient,
     audit: AuditLogger,
     outcome: FlowOutcome,
-    user_id: str,
     tap_code: str | None,
+    settings: Settings,
 ) -> None:
     if not event.personal_email:
         outcome.add(
@@ -279,21 +342,62 @@ def _send_welcome_mail(
         )
         return
 
-    body = (
-        f"<p>Welcome, {event.display_name or event.user_principal_name}!</p>"
-        f"<p>Your work account is <b>{event.user_principal_name}</b>.</p>"
-    )
+    if not settings.welcome_mail_sender:
+        detail = "WELCOME_MAIL_SENDER is not configured; cannot send welcome mail"
+        outcome.add("send_welcome_mail", event.user_principal_name, StepResult.FAILED, detail=detail)
+        audit.record(
+            correlation_id=event.correlation_id,
+            event_type=outcome.event_type,
+            action="send_welcome_mail",
+            target=event.user_principal_name,
+            result="failed",
+            detail=detail,
+        )
+        return
+
+    safe_display_name = html.escape(event.display_name or event.user_principal_name)
+    safe_upn = html.escape(event.user_principal_name)
+    body = f"<p>Welcome, {safe_display_name}!</p><p>Your work account is <b>{safe_upn}</b>.</p>"
     body += (
-        f"<p>Use this Temporary Access Pass to sign in for the first time: <b>{tap_code}</b></p>"
+        f"<p>Use this Temporary Access Pass to sign in for the first time: "
+        f"<b>{html.escape(tap_code)}</b></p>"
         if tap_code
         else "<p>Your manager will share your first sign-in credentials separately.</p>"
     )
-    graph.send_mail(
-        user_id=user_id,
-        subject="Welcome — your new account is ready",
-        body_html=body,
-        to_addresses=[event.personal_email],
-    )
+
+    # A mail-send failure must never abort the flow — every step above has
+    # already completed successfully by this point, so the account itself is
+    # fully provisioned even if the welcome email doesn't go out. Distinguish
+    # transient (Graph throttling/outage — worth retrying the message) from
+    # permanent (bad recipient address, sender not licensed, etc.) so
+    # queue_processor knows whether to let the host retry.
+    try:
+        graph.send_mail(
+            sender=settings.welcome_mail_sender,
+            subject="Welcome — your new account is ready",
+            body_html=body,
+            to_addresses=[event.personal_email],
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade to a failed step, never raise
+        retryable = is_transient_graph_failure(exc)
+        detail = f"welcome mail send failed: {exc}"
+        outcome.add(
+            "send_welcome_mail",
+            event.personal_email,
+            StepResult.FAILED,
+            detail=detail,
+            retryable=retryable,
+        )
+        audit.record(
+            correlation_id=event.correlation_id,
+            event_type=outcome.event_type,
+            action="send_welcome_mail",
+            target=event.personal_email,
+            result="failed",
+            detail=detail,
+        )
+        return
+
     outcome.add(
         "send_welcome_mail",
         event.personal_email,
