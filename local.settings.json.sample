@@ -1,0 +1,26 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+
+    "GRAPH_BASE_URL": "https://graph.microsoft.com/v1.0",
+    "GRAPH_BETA_URL": "https://graph.microsoft.com/beta",
+    "DEFAULT_DOMAIN": "yourtenant.onmicrosoft.com",
+    "DEFAULT_USAGE_LOCATION": "GB",
+
+    "EVENTS_QUEUE_NAME": "identity-events",
+    "INBOUND_CONTAINER_NAME": "identity-events-inbound",
+    "IDEMPOTENCY_TABLE_NAME": "IdempotencyLedger",
+
+    "LOGS_INGESTION_ENDPOINT": "",
+    "LOGS_DCR_IMMUTABLE_ID": "",
+    "LOGS_STREAM_NAME": "Custom-IdentityLifecycleAudit_CL",
+    "LOCAL_AUDIT_LOG_PATH": "audit-fallback.log",
+
+    "LEAVER_DEFERRED_DELETE_DAYS": "30",
+    "DRY_RUN": "true",
+
+    "AZURE_CLIENT_ID": ""
+  }
+}
