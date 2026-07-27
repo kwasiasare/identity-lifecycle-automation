@@ -51,7 +51,7 @@ def parse_json_bytes(data: bytes, *, default_source: str = "http") -> ParsedBatc
     rows = payload if isinstance(payload, list) else [payload]
     for idx, row in enumerate(rows):
         if not isinstance(row, dict):
-            batch.issues.append(_issue(idx, "row is not a JSON object", {"value": row}))
+            batch.issues.append(_issue(idx, "row is not a JSON object", {}))
             continue
         _parse_row(row, idx, batch, default_source)
     return batch
@@ -73,7 +73,11 @@ def _parse_row(
             extras[key] = value
 
     cleaned.setdefault("source", default_source)
-    cleaned["raw"] = {**extras, **dict(row.items())}
+    # Only unknown (extra) columns are candidates for `raw`, and even those
+    # are capped to an explicit allow-list by UserEvent's own validator —
+    # known/typed fields are never duplicated into raw, and arbitrary HR
+    # columns (salary, national ID, etc.) never ride along at all.
+    cleaned["raw"] = extras
 
     event_type_raw = cleaned.get("event_type")
     if isinstance(event_type_raw, str):
@@ -96,10 +100,10 @@ def _format_pydantic_error(exc: ValidationError) -> str:
     return "; ".join(parts)
 
 
-def _issue(idx: int, message: str, raw_row: dict[str, Any]):
+def _issue(idx: int, message: str, row: dict[str, Any]):
     from identity_lifecycle.models import ValidationIssue
 
-    return ValidationIssue(row_index=idx, message=message, raw_row=raw_row)
+    return ValidationIssue(row_index=idx, message=message, field_names=list(row.keys()))
 
 
 def known_event_types() -> set[str]:

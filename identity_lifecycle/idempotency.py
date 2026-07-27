@@ -4,11 +4,17 @@
    writing (see graph_client.py) — this is what makes replaying a whole event
    produce no duplicate side effects even if the ledger below were unavailable.
 
-2. Event-level ledger: a lightweight dedupe record per (event_type, correlation_id)
+2. Event-level ledger: a lightweight dedupe record per (event_type, dedupe_key)
    so a queue redelivery (Storage Queues are at-least-once) short-circuits before
    re-running Graph calls at all, and so the audit trail can distinguish "genuine
    replay, no-op" from "first run". Backed by Azure Table Storage in Azure,
    with an in-memory implementation for local dev and unit tests.
+
+   The dedupe key passed to every method below is `UserEvent.idempotency_key`
+   (see models.py), NOT `correlation_id` — correlation_id is purely a trace id
+   and may be a fresh uuid4 on every parse of the same underlying row, which
+   would defeat dedup on CSV/blob replay. The parameter is still named
+   `correlation_id` here for signature stability; callers pass idempotency_key.
 """
 
 from __future__ import annotations
