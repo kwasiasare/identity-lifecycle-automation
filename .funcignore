@@ -1,0 +1,25 @@
+# Excluded from the Azure Functions deployment package (Oryx build only runs
+# `pip install -r requirements.txt` and packages what's left — none of this
+# is needed at runtime, and tests/samples in particular should never ship to
+# a production Function App).
+.git*
+.github/
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+infra/
+samples/
+docs/
+exo/
+*.md
+local.settings.json
+local.settings.json.sample
+requirements-dev.txt
+audit-fallback.log

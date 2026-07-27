@@ -16,6 +16,7 @@ bin/
 obj/
 .python_packages/
 func_worker.log
+audit-fallback.log
 
 # Bicep build output
 *.json.bak

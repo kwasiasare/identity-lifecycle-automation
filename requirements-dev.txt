@@ -1,7 +1,7 @@
 -r requirements.txt
-pytest>=8.2.0
-pytest-cov>=5.0.0
-pytest-mock>=3.14.0
-respx>=0.21.1
-ruff>=0.5.0
-freezegun>=1.5.1
+pytest==9.1.1
+pytest-cov==7.1.0
+pytest-mock==3.15.1
+respx==0.23.1
+ruff==0.16.0
+freezegun==1.5.5

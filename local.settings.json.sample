@@ -12,6 +12,7 @@
     "EVENTS_QUEUE_NAME": "identity-events",
     "INBOUND_CONTAINER_NAME": "identity-events-inbound",
     "IDEMPOTENCY_TABLE_NAME": "IdempotencyLedger",
+    "LEAVER_SCHEDULE_TABLE_NAME": "LeaverSchedule",
 
     "LOGS_INGESTION_ENDPOINT": "",
     "LOGS_DCR_IMMUTABLE_ID": "",
@@ -19,6 +20,8 @@
     "LOCAL_AUDIT_LOG_PATH": "audit-fallback.log",
 
     "LEAVER_DEFERRED_DELETE_DAYS": "30",
+    "WELCOME_MAIL_SENDER": "no-reply@yourtenant.onmicrosoft.com",
+    "GRAPH_MAX_RETRIES": "4",
     "DRY_RUN": "true",
 
     "AZURE_CLIENT_ID": ""

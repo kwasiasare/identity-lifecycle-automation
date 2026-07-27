@@ -1,7 +1,12 @@
-# Azure Functions Python v2 programming model runtime dependencies
-azure-functions>=1.21.0
-azure-identity>=1.17.0
-azure-data-tables>=12.5.0
-azure-monitor-ingestion>=1.0.4
-httpx>=0.27.0
-pydantic>=2.7.0
+# Azure Functions Python v2 programming model runtime dependencies.
+# Pinned to exact versions (not >=) so `pip install -r requirements.txt` —
+# which is all Oryx runs during deployment (see README "Repository layout")
+# — reproduces exactly what CI lints and tests against, not whatever the
+# latest release happens to be on deploy day. Bump deliberately, in a PR, not
+# silently on every build.
+azure-functions==1.24.0
+azure-identity==1.25.3
+azure-data-tables==12.7.0
+azure-monitor-ingestion==1.1.0
+httpx==0.28.1
+pydantic==2.13.4
