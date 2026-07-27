@@ -1,0 +1,30 @@
+[project]
+name = "identity-lifecycle-automation"
+version = "0.1.0"
+description = "Event-driven joiner/mover/leaver automation for Microsoft Entra + M365"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+exclude = ["infra", ".venv", "venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4"]
+ignore = [
+    "E501",
+    "UP042",  # str+Enum (not StrEnum) is intentional: keeps pydantic/json serialization simple and explicit
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["identity_lifecycle"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["src/identity_lifecycle"]

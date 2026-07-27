@@ -1,0 +1,35 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Azure Functions local artifacts
+local.settings.json
+bin/
+obj/
+.python_packages/
+func_worker.log
+
+# Bicep build output
+*.json.bak
+infra/**/*.json
+!infra/**/parameters/*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Secrets - never commit
+*.env
+.env
+*.pem
+*.key
