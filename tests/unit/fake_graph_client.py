@@ -97,10 +97,10 @@ class FakeGraphClient:
     def revoke_sign_in_sessions(self, user_id: str) -> None:
         self.mutation_calls.append(f"revoke_sessions:{user_id}")
 
-    def send_mail(self, user_id: str, subject: str, body_html: str, to_addresses: list[str]) -> None:
-        self.mutation_calls.append(f"send_mail:{user_id}:{to_addresses}")
+    def send_mail(self, sender: str, subject: str, body_html: str, to_addresses: list[str]) -> None:
+        self.mutation_calls.append(f"send_mail:{sender}:{to_addresses}")
         self.sent_mail.append(
-            {"user_id": user_id, "subject": subject, "body_html": body_html, "to": to_addresses}
+            {"sender": sender, "subject": subject, "body_html": body_html, "to": to_addresses}
         )
 
     # -- groups -----------------------------------------------------------------
@@ -109,24 +109,39 @@ class FakeGraphClient:
         return self.groups.get(display_name)
 
     def is_group_member(self, group_id: str, user_id: str) -> bool:
+        """Pure in-memory check — not a Graph call, safe to keep for direct
+        test assertions (`fake_graph.is_group_member(...)`), unlike the real
+        GraphClient which no longer exposes a per-call membership check."""
         return user_id in self.memberships.get(group_id, set())
 
-    def ensure_group_member(self, group_id: str, user_id: str) -> bool:
-        if self.is_group_member(group_id, user_id):
+    def get_member_of_group_ids(self, user_id: str) -> set[str]:
+        return {gid for gid, members in self.memberships.items() if user_id in members}
+
+    def ensure_group_member(
+        self, group_id: str, user_id: str, *, member_of_ids: set[str] | None = None
+    ) -> bool:
+        if member_of_ids is not None:
+            already_member = group_id in member_of_ids
+        else:
+            already_member = self.is_group_member(group_id, user_id)
+        if already_member:
             return False
         self.mutation_calls.append(f"add_member:{group_id}:{user_id}")
         self.memberships.setdefault(group_id, set()).add(user_id)
         return True
 
-    def ensure_group_member_removed(self, group_id: str, user_id: str) -> bool:
-        if not self.is_group_member(group_id, user_id):
+    def ensure_group_member_removed(
+        self, group_id: str, user_id: str, *, member_of_ids: set[str] | None = None
+    ) -> bool:
+        if member_of_ids is not None:
+            already_member = group_id in member_of_ids
+        else:
+            already_member = self.is_group_member(group_id, user_id)
+        if not already_member:
             return False
         self.mutation_calls.append(f"remove_member:{group_id}:{user_id}")
         self.memberships[group_id].discard(user_id)
         return True
-
-    def list_member_of_group_ids(self, user_id: str, candidate_group_ids: set[str]) -> set[str]:
-        return {gid for gid, members in self.memberships.items() if user_id in members} & candidate_group_ids
 
     # -- manager ------------------------------------------------------------------
 
@@ -146,10 +161,15 @@ class FakeGraphClient:
         return self.tap_methods.get(user_id, [])
 
     def issue_temporary_access_pass(self, user_id: str, lifetime_minutes: int = 480) -> dict[str, Any] | None:
-        if self.tap_methods.get(user_id):
+        if any(m.get("isUsable") for m in self.tap_methods.get(user_id, [])):
             return None
         self.mutation_calls.append(f"issue_tap:{user_id}")
-        method = {"id": _new_id("tap"), "temporaryAccessPass": "TAP-123456", "lifetimeInMinutes": lifetime_minutes}
+        method = {
+            "id": _new_id("tap"),
+            "temporaryAccessPass": "TAP-123456",
+            "lifetimeInMinutes": lifetime_minutes,
+            "isUsable": True,
+        }
         self.tap_methods.setdefault(user_id, []).append(method)
         return method
 
