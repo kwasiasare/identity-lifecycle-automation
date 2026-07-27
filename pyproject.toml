@@ -8,7 +8,7 @@ readme = "README.md"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests"]
+src = ["identity_lifecycle", "tests"]
 exclude = ["infra", ".venv", "venv"]
 
 [tool.ruff.lint]
@@ -23,8 +23,11 @@ known-first-party = ["identity_lifecycle"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "."]
+pythonpath = ["."]
 addopts = "-ra --strict-markers"
 
 [tool.coverage.run]
-source = ["src/identity_lifecycle"]
+source = ["identity_lifecycle", "function_app"]
+
+[tool.coverage.report]
+fail_under = 85
