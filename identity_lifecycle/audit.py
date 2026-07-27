@@ -54,10 +54,19 @@ class AuditLogger:
         self._settings = settings
         self._ingestion_client = ingestion_client
         self._buffer: list[AuditRecord] = []  # exposed for tests / local inspection
+        # Running count of records that fell back to local logging (either
+        # because Log Analytics isn't configured, or because a send failed) —
+        # surfaced as a warning-level metric log so a sustained ingestion
+        # outage is visible/alertable without inspecting every audit line.
+        self._fallback_count = 0
 
     @property
     def buffer(self) -> list[AuditRecord]:
         return list(self._buffer)
+
+    @property
+    def fallback_count(self) -> int:
+        return self._fallback_count
 
     def record(
         self,
@@ -98,6 +107,12 @@ class AuditLogger:
             # losing it from the local/fallback JSON representation.
             log_entry = rec.to_dict()
             log_entry["TimeGenerated"] = log_entry["time_generated"]
+            # The DCR declares `extra` as a `string` column (see
+            # infra/modules/log-analytics.bicep) but AuditRecord.extra is a
+            # dict — sending it as a raw JSON object would mismatch the
+            # declared schema. Serialize it to a JSON string before upload;
+            # the local/fallback representation keeps the richer dict form.
+            log_entry["extra"] = json.dumps(rec.extra, default=str)
             client.upload(
                 rule_id=self._settings.logs_dcr_immutable_id,
                 stream_name=self._settings.logs_stream_name,
@@ -105,11 +120,16 @@ class AuditLogger:
             )
             return True
         except Exception:  # noqa: BLE001 - audit sink must never raise into a flow
+            self._fallback_count += 1
             logger.exception(
                 "audit: Log Analytics ingestion failed, falling back to local log; "
                 "correlation_id=%s action=%s",
                 rec.correlation_id,
                 rec.action,
+            )
+            logger.warning(
+                "audit: Log Analytics ingestion fallback count for this instance is now %d",
+                self._fallback_count,
             )
             return False
 

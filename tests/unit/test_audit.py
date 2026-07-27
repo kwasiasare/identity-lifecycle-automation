@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from identity_lifecycle.audit import AuditLogger
+from identity_lifecycle.config import Settings
 
 
 def test_record_appends_to_buffer(settings):
@@ -95,3 +96,53 @@ def test_log_analytics_ingestion_failure_falls_back_to_local(settings):
         lines = fh.readlines()
     assert len(lines) == 1
     assert "corr-4" in lines[0]
+    assert audit.fallback_count == 1
+
+
+def test_log_analytics_upload_serializes_extra_as_a_json_string():
+    """The DCR declares `extra` as a `string` column — the uploaded payload
+    must not send a raw JSON object for it, or Log Analytics would reject/
+    mismatch the declared schema."""
+    settings = Settings(logs_ingestion_endpoint="https://fake-dce.example.com", logs_dcr_immutable_id="dcr-fake-id")
+
+    class _FakeIngestionClient:
+        def __init__(self):
+            self.uploaded = []
+
+        def upload(self, *, rule_id, stream_name, logs):
+            self.uploaded.append(logs[0])
+
+    fake_client = _FakeIngestionClient()
+    audit = AuditLogger(settings, ingestion_client=fake_client)
+    audit.record(
+        correlation_id="corr-5",
+        event_type="joiner",
+        action="create_user",
+        target="e@contoso.onmicrosoft.com",
+        result="success",
+        user_id="user-123",
+    )
+
+    uploaded_extra = fake_client.uploaded[0]["extra"]
+    assert isinstance(uploaded_extra, str)
+    assert json.loads(uploaded_extra) == {"user_id": "user-123"}
+
+
+def test_fallback_count_accumulates_across_repeated_failures():
+    settings = Settings(logs_ingestion_endpoint="https://fake-dce.example.com", logs_dcr_immutable_id="dcr-fake-id")
+
+    class _BrokenIngestionClient:
+        def upload(self, **kwargs):
+            raise RuntimeError("simulated outage")
+
+    audit = AuditLogger(settings, ingestion_client=_BrokenIngestionClient())
+    for i in range(3):
+        audit.record(
+            correlation_id=f"corr-{i}",
+            event_type="joiner",
+            action="create_user",
+            target="f@contoso.onmicrosoft.com",
+            result="success",
+        )
+
+    assert audit.fallback_count == 3
