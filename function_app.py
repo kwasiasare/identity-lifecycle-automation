@@ -28,11 +28,22 @@ the Functions runtime — this file is intentionally thin: parse trigger input,
 call into identity_lifecycle, log the outcome.
 """
 
-from __future__ import annotations
+# NOTE: deliberately NO `from __future__ import annotations` here, and
+# deliberately `typing.List` rather than the PEP 585 builtin `list` in the
+# trigger signatures below. The Azure Functions Python v2 worker indexes this
+# module by reflecting over each decorated function's parameter annotations to
+# match them to their bindings. It cannot resolve a PEP 585 builtin generic
+# inside `func.Out[...]` (`func.Out[list[str]]`), and that failure aborts
+# indexing for the WHOLE function app — the host reports "0 functions loaded"
+# and never starts a Python worker, with no error surfaced anywhere. See
+# README "Known issues" for the full RCA. Keep trigger signatures using
+# typing.List/typing.Dict, and keep this module free of postponed annotation
+# evaluation. (identity_lifecycle/* is never indexed, so it is unaffected.)
 
 import json
 import logging
 import os
+from typing import List
 
 import azure.functions as func
 
@@ -102,7 +113,7 @@ def _build_leaver_schedule_store(settings: Settings) -> LeaverScheduleStore:
     queue_name="%EVENTS_QUEUE_NAME%",
     connection="AzureWebJobsStorage",
 )
-def http_intake(req: func.HttpRequest, outqueue: func.Out[list[str]]) -> func.HttpResponse:
+def http_intake(req: func.HttpRequest, outqueue: func.Out[List[str]]) -> func.HttpResponse:
     content_type = req.headers.get("content-type") or ""
     format_param = req.params.get("format")
     body = req.get_body()
@@ -190,7 +201,7 @@ if _ENABLE_BLOB_INTAKE:
         queue_name="%EVENTS_QUEUE_NAME%",
         connection="AzureWebJobsStorage",
     )
-    def blob_intake(blob: func.InputStream, outqueue: func.Out[list[str]]) -> None:
+    def blob_intake(blob: func.InputStream, outqueue: func.Out[List[str]]) -> None:
         data = blob.read()
         batch = parse_csv_bytes(data, default_source=f"blob:{blob.name}")
         logger.info(

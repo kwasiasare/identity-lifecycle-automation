@@ -18,6 +18,16 @@ ignore = [
     "UP042",  # str+Enum (not StrEnum) is intentional: keeps pydantic/json serialization simple and explicit
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# function_app.py MUST use typing.List (not the PEP 585 builtin `list`) inside
+# func.Out[...]. The Azure Functions Python v2 worker indexes the app by
+# reflecting over trigger parameter annotations, and it cannot resolve a
+# builtin generic nested in func.Out[...] — that failure silently drops EVERY
+# function in the app (the host reports "0 functions loaded" and never starts a
+# Python worker). See README "Known issue (RESOLVED)". These ignores exist
+# specifically so `ruff --fix` cannot reintroduce that outage.
+"function_app.py" = ["UP006", "UP035"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["identity_lifecycle"]
 

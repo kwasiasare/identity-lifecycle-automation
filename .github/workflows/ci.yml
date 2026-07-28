@@ -225,8 +225,13 @@ jobs:
           # — see README "Known gap on Flex Consumption" for why.
           expected="http_intake queue_processor events_poison_queue deferred_deletion_sweep"
           registered=""
-          for attempt in 1 2 3 4 5 6; do
-            registered=$(az functionapp function list --name "$app_name" --resource-group "$rg" --query "[].name" -o tsv || true)
+          # `az functionapp function list --query "[].name"` returns ARM child
+          # resource names, i.e. "<app-name>/<function-name>" — NOT the bare
+          # function name. The `grep -qx` below is a whole-line match, so
+          # without stripping that prefix this check could never pass, even
+          # with all four functions correctly registered. Strip it here.
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            registered=$(az functionapp function list --name "$app_name" --resource-group "$rg" --query "[].name" -o tsv 2>/dev/null | sed "s|^${app_name}/||" || true)
             missing=0
             for fn in $expected; do
               echo "$registered" | grep -qx "$fn" || missing=1
@@ -347,8 +352,13 @@ jobs:
           # — see README "Known gap on Flex Consumption" for why.
           expected="http_intake queue_processor events_poison_queue deferred_deletion_sweep"
           registered=""
-          for attempt in 1 2 3 4 5 6; do
-            registered=$(az functionapp function list --name "$app_name" --resource-group "$rg" --query "[].name" -o tsv || true)
+          # `az functionapp function list --query "[].name"` returns ARM child
+          # resource names, i.e. "<app-name>/<function-name>" — NOT the bare
+          # function name. The `grep -qx` below is a whole-line match, so
+          # without stripping that prefix this check could never pass, even
+          # with all four functions correctly registered. Strip it here.
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            registered=$(az functionapp function list --name "$app_name" --resource-group "$rg" --query "[].name" -o tsv 2>/dev/null | sed "s|^${app_name}/||" || true)
             missing=0
             for fn in $expected; do
               echo "$registered" | grep -qx "$fn" || missing=1

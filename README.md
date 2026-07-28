@@ -64,15 +64,70 @@ flowchart LR
 > and timer triggers are fully supported on Flex Consumption).
 >
 > `blob_intake` is additionally **gated behind the `ENABLE_BLOB_INTAKE` app
-> setting (default off — unset/`false`)**: while a never-fires trigger was
-> already a known gap, we also hit dev deploys where the whole app registered
-> **zero** functions on Flex Consumption (not just `blob_intake`), and the
-> working theory is that this one binding with no Flex equivalent can fail
-> the host's metadata/binding validation for the entire file rather than
-> just itself. The function stays defined in code — set
-> `ENABLE_BLOB_INTAKE=true` once it's converted to the Event Grid source —
-> it's just not registered with the runtime until then, so it can't take
-> the other four functions down with it. See "Remaining TODOs" below.
+> setting (default off — unset/`false`)** until it is converted to the Event
+> Grid source. The function stays defined in code; it is simply not registered
+> with the runtime until then. See "Remaining TODOs" below.
+
+### Known issue (RESOLVED): app registered zero functions on Flex Consumption
+
+For several days every dev deploy produced a Function App with **zero**
+functions registered. Recording the RCA here because essentially every
+plausible-looking lead was wrong, and the real cause is invisible in logs.
+
+**Symptom.** `az functionapp function list` empty and `/admin/functions`
+empty. App Insights showed, on every host start:
+`Loading functions metadata` -> `Reading functions metadata (Custom)` ->
+`0 functions found (Custom)` -> `0 functions loaded` ->
+`RpcFunctionInvocationDispatcher received no functions`, all in under a
+millisecond, with **no Python worker process ever started** and **no error,
+warning or exception anywhere** — not in App Insights traces at Debug level,
+not in the deployment logs, not in the host's `errors` collection.
+
+**Root cause.** `http_intake` was annotated
+`outqueue: func.Out[list[str]]`. The Azure Functions Python **v2 programming
+model** indexes the app by reflecting over each decorated function's parameter
+annotations to match them to their declared bindings. It cannot resolve a
+**PEP 585 builtin generic** (`list[str]`) nested inside `func.Out[...]`; only
+`typing.List[str]` works. Critically, that one unresolvable annotation makes
+indexing fail **for the entire function app**, not just the offending
+function — so all four functions disappeared, and the failure is reported as
+"0 functions" rather than as an error.
+
+**Fix.** Use `typing.List[str]` (not `list[str]`) inside `func.Out[...]` in
+`function_app.py`, and keep that module free of
+`from __future__ import annotations` so trigger annotations are real objects
+rather than strings. `identity_lifecycle/*` is never indexed by the worker, so
+it is unaffected and still uses builtin generics freely.
+
+**Proven by bisection against the live dev app** (each step a real deploy):
+
+| Package | Result |
+| --- | --- |
+| Minimal 1-function HTTP app | 1 function registered |
+| + `queueTrigger` + `timerTrigger` + `%EVENTS_QUEUE_NAME%-poison` | 4 registered |
+| + one `@app.route` + `@app.queue_output` fn with `func.Out[list[str]]` | **0 registered** |
+| same, changed to `func.Out[List[str]]` | 5 registered |
+
+**Leads that were investigated and are *not* the cause** — don't re-litigate
+these: the Bicep `functionAppConfig` (correct; `FUNCTIONS_WORKER_RUNTIME=python`
+and `FUNCTIONS_WORKER_RUNTIME_VERSION=3.11` are injected by the platform and
+must *not* be set as app settings — ARM rejects them on Flex); the
+UserAssignedIdentity deployment-storage auth and its `Storage Blob Data
+Contributor` role assignment (present and working — the package mounts, and
+`host.json` is read, proven by `functionTimeout` showing up in
+`ScriptJobHostOptions`); Python 3.11 on Flex in eastus2 (supported, EOL Oct
+2027); the deployment package layout (correct Oryx output with
+`.python_packages/lib/site-packages`); dependency imports (all 15 modules
+import successfully in **847 ms** total on-device); the extension bundle and
+queue/timer bindings (resolve fine); `PYTHON_ENABLE_INIT_INDEXING`;
+`metadataProviderTimeout`; and `Azure/functions-action@v1` (the failure
+reproduces identically deploying by hand via the Flex `/api/publish` endpoint).
+
+A **second, independent** bug was fixed at the same time: the CI smoke check
+ran `az functionapp function list --query "[].name"`, which returns ARM child
+resource names (`<app-name>/<function-name>`), and matched them with
+`grep -qx "<function-name>"` — a whole-line match that could never succeed.
+That check would have failed even once the app was healthy.
 
 **Design choices worth calling out:**
 
