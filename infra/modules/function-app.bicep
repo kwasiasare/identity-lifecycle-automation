@@ -192,6 +192,18 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         // and the deployment package location/auth come from
         // functionAppConfig.deployment.storage above.
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
+        // Python 3.11 (unlike 3.13+) does not run worker function indexing
+        // during cold-start init by default — it needs this flag to opt in.
+        // Without it we observed the host log "Reading functions metadata
+        // (Custom)" -> "0 functions found (Custom)" in well under a
+        // millisecond on every cold start: the host never even attempted to
+        // launch the Python worker to index function_app.py, which is
+        // exactly the symptom this app hit after moving to Flex Consumption
+        // (see README "Known gap on Flex Consumption" / CI history). See
+        // https://learn.microsoft.com/azure/azure-functions/python-build-options
+        // ("Module import has a 2-minute time limit ... for older python
+        // versions with PYTHON_ENABLE_INIT_INDEXING enabled").
+        { name: 'PYTHON_ENABLE_INIT_INDEXING', value: '1' }
         { name: 'AzureWebJobsStorage', value: storageConnectionString }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
         { name: 'AZURE_CLIENT_ID', value: managedIdentityClientId }
