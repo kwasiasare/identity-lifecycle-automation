@@ -179,11 +179,35 @@ jobs:
         # threading a poll/retry loop through a third-party action.
         run: sleep 90
 
+      - name: Build lean deployment package
+        # Azure/functions-action's `respect-funcignore` input is documented
+        # to exclude .funcignore's entries, but it's known broken for Flex
+        # Consumption Python deploys (Azure/functions-action#266 — folders
+        # remain in the zip even with respect-funcignore: true). That's how
+        # a previous deploy shipped .github/, infra/, tests/, samples/,
+        # .git*, .coverage etc. straight into the Flex deployment package
+        # instead of just the app. Build the package explicitly instead of
+        # relying on that input: stage only what the Python worker needs to
+        # index and run (function_app.py, host.json, requirements.txt,
+        # identity_lifecycle/) and deploy the staging dir. Remote build
+        # (remote-build: true below) then runs Oryx's `pip install -r
+        # requirements.txt` against this clean tree on Azure's Linux build
+        # image and produces the .python_packages/lib/site-packages Flex
+        # actually loads at runtime.
+        run: |
+          rm -rf deploy-stage
+          mkdir -p deploy-stage
+          cp function_app.py host.json requirements.txt deploy-stage/
+          cp -r identity_lifecycle deploy-stage/identity_lifecycle
+          find deploy-stage -name "__pycache__" -type d -prune -exec rm -rf {} +
+          echo "Staged deployment package contents:"
+          find deploy-stage -type f | sort
+
       - name: Deploy function code
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ steps.infra.outputs.function_app_name }}
-          package: "."
+          package: "deploy-stage"
           remote-build: true
 
       - name: Smoke check — function app is up and functions registered
@@ -290,11 +314,25 @@ jobs:
         # code-deploy step relies on it.
         run: sleep 90
 
+      - name: Build lean deployment package
+        # See the matching step in deploy-dev above: Azure/functions-action's
+        # respect-funcignore input is broken for Flex Consumption Python
+        # deploys (Azure/functions-action#266), so stage a clean tree
+        # containing only the app instead of relying on it.
+        run: |
+          rm -rf deploy-stage
+          mkdir -p deploy-stage
+          cp function_app.py host.json requirements.txt deploy-stage/
+          cp -r identity_lifecycle deploy-stage/identity_lifecycle
+          find deploy-stage -name "__pycache__" -type d -prune -exec rm -rf {} +
+          echo "Staged deployment package contents:"
+          find deploy-stage -type f | sort
+
       - name: Deploy function code
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ steps.infra.outputs.function_app_name }}
-          package: "."
+          package: "deploy-stage"
           remote-build: true
 
       - name: Smoke check — function app is up and functions registered
