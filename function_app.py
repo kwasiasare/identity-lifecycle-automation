@@ -51,6 +51,14 @@ logger = logging.getLogger("identity_lifecycle.function_app")
 
 app = func.FunctionApp()
 
+# blob_intake is gated off by default — see the KNOWN GAP note on its
+# definition below and README "Known gap on Flex Consumption". Set
+# ENABLE_BLOB_INTAKE=true (app setting) once it's been converted to the
+# Event Grid blob trigger source; until then it stays unregistered so a
+# platform-level indexing problem with the unsupported polling trigger
+# can't take the other four functions down with it.
+_ENABLE_BLOB_INTAKE = os.environ.get("ENABLE_BLOB_INTAKE", "false").strip().lower() == "true"
+
 _FLOW_DISPATCH = {
     EventType.JOINER: run_joiner,
     EventType.MOVER: run_mover,
@@ -151,7 +159,6 @@ def build_intake_response(batch: ParsedBatch) -> tuple[int, dict]:
 # ---------------------------------------------------------------------------
 
 
-@app.function_name(name="blob_intake")
 # KNOWN GAP (tracked in README.md "Remaining TODOs"): this is the classic
 # polling Blob Storage trigger. The app now deploys on Flex Consumption
 # (infra/modules/function-app.bicep), which supports only the Event Grid blob
@@ -159,35 +166,49 @@ def build_intake_response(batch: ParsedBatch) -> tuple[int, dict]:
 # fires. Fix: add `source=func.BlobSource.EVENT_GRID` here and wire an Event
 # Grid system topic + subscription onto the storage account in
 # infra/modules/storage.bicep. Until then, use http_intake for live intake.
-@app.blob_trigger(
-    arg_name="blob",
-    path="%INBOUND_CONTAINER_NAME%/{name}",
-    connection="AzureWebJobsStorage",
-)
-@app.queue_output(
-    arg_name="outqueue",
-    queue_name="%EVENTS_QUEUE_NAME%",
-    connection="AzureWebJobsStorage",
-)
-def blob_intake(blob: func.InputStream, outqueue: func.Out[list[str]]) -> None:
-    data = blob.read()
-    batch = parse_csv_bytes(data, default_source=f"blob:{blob.name}")
-    logger.info(
-        "blob_intake: parsed %s (%d events, %d issues)",
-        blob.name,
-        batch.event_count,
-        len(batch.issues),
+#
+# Registration is also gated behind ENABLE_BLOB_INTAKE (default off — see
+# _ENABLE_BLOB_INTAKE above): while chasing every function on this app
+# registering as 0 found on Flex Consumption (host logs "Reading functions
+# metadata (Custom)" -> "0 functions found (Custom)" on every cold start,
+# with no python worker traces at all), this unsupported-on-Flex trigger
+# type was the one binding in this file with no Flex equivalent, and the
+# working theory is that the host's metadata/binding validation pass can
+# fail closed for the *whole* file rather than just this one function.
+# Keeping it defined but unregistered means the code + the Event Grid
+# fix are ready to land without that risk to the other four functions.
+if _ENABLE_BLOB_INTAKE:
+
+    @app.function_name(name="blob_intake")
+    @app.blob_trigger(
+        arg_name="blob",
+        path="%INBOUND_CONTAINER_NAME%/{name}",
+        connection="AzureWebJobsStorage",
     )
-    for issue in batch.issues:
-        # field_names only — never the row's actual values (may contain
-        # arbitrary/sensitive HR columns).
-        logger.warning(
-            "blob_intake: row %d rejected: %s (fields: %s)",
-            issue.row_index, issue.message, issue.field_names,
+    @app.queue_output(
+        arg_name="outqueue",
+        queue_name="%EVENTS_QUEUE_NAME%",
+        connection="AzureWebJobsStorage",
+    )
+    def blob_intake(blob: func.InputStream, outqueue: func.Out[list[str]]) -> None:
+        data = blob.read()
+        batch = parse_csv_bytes(data, default_source=f"blob:{blob.name}")
+        logger.info(
+            "blob_intake: parsed %s (%d events, %d issues)",
+            blob.name,
+            batch.event_count,
+            len(batch.issues),
         )
-    messages = events_to_queue_messages(batch)
-    if messages:
-        outqueue.set(messages)
+        for issue in batch.issues:
+            # field_names only — never the row's actual values (may contain
+            # arbitrary/sensitive HR columns).
+            logger.warning(
+                "blob_intake: row %d rejected: %s (fields: %s)",
+                issue.row_index, issue.message, issue.field_names,
+            )
+        messages = events_to_queue_messages(batch)
+        if messages:
+            outqueue.set(messages)
 
 
 def events_to_queue_messages(batch: ParsedBatch) -> list[str]:

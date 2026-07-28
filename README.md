@@ -62,6 +62,17 @@ flowchart LR
 > use `http_intake` instead. `http_intake`, `queue_processor`,
 > `events_poison_queue`, and `deferred_deletion_sweep` are unaffected (queue
 > and timer triggers are fully supported on Flex Consumption).
+>
+> `blob_intake` is additionally **gated behind the `ENABLE_BLOB_INTAKE` app
+> setting (default off — unset/`false`)**: while a never-fires trigger was
+> already a known gap, we also hit dev deploys where the whole app registered
+> **zero** functions on Flex Consumption (not just `blob_intake`), and the
+> working theory is that this one binding with no Flex equivalent can fail
+> the host's metadata/binding validation for the entire file rather than
+> just itself. The function stays defined in code — set
+> `ENABLE_BLOB_INTAKE=true` once it's converted to the Event Grid source —
+> it's just not registered with the runtime until then, so it can't take
+> the other four functions down with it. See "Remaining TODOs" below.
 
 **Design choices worth calling out:**
 
@@ -564,6 +575,9 @@ done, and requiring tenant/subscription access this build didn't have:
 7. **Convert `blob_intake` to the Event Grid trigger source** (see the "Known
    gap on Flex Consumption" callout under Architecture above) — required
    before CSV-drop intake is usable; not required for `http_intake` or the
-   rest of the pipeline.
+   rest of the pipeline. Once converted, add an `ENABLE_BLOB_INTAKE=true`
+   app setting (`infra/modules/function-app.bicep`'s `appSettings` array
+   currently has no entry for it — add one) to register it; until then
+   it's intentionally left unregistered (see the callout).
 8. **Approve dev -> master PR** once dev is manually tested, per the standard
    workflow.
