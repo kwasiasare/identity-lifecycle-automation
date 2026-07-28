@@ -1,6 +1,7 @@
 // Storage account backing AzureWebJobsStorage: queue for event intake, blob
 // container for CSV drop intake, table for the idempotency ledger fallback,
-// and the Functions consumption plan's own content share.
+// and the Flex Consumption plan's deployment package container (where the
+// pipeline's published zip lives — see function-app.bicep functionAppConfig).
 @description('Storage account name (must be globally unique, lowercase, <=24 chars, no dashes).')
 @minLength(3)
 @maxLength(24)
@@ -20,6 +21,9 @@ param inboundContainerName string = 'identity-events-inbound'
 
 @description('Name of the table used as the idempotency ledger fallback.')
 param idempotencyTableName string = 'IdempotencyLedger'
+
+@description('Name of the blob container the Flex Consumption plan pulls the deployment package (zip) from — see infra/modules/function-app.bicep functionAppConfig.deployment.storage.')
+param deploymentPackageContainerName string = 'deploymentpackage'
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
@@ -49,6 +53,14 @@ resource inboundContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
   }
 }
 
+resource deploymentPackageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
+  parent: blobService
+  name: deploymentPackageContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-01-01' = {
   parent: storageAccount
   name: 'default'
@@ -71,6 +83,12 @@ resource idempotencyTable 'Microsoft.Storage/storageAccounts/tableServices/table
 
 output id string = storageAccount.id
 output name string = storageAccount.name
+// Blob service endpoint (e.g. https://<name>.blob.core.windows.net/) — used
+// by function-app.bicep to build the Flex Consumption deployment container
+// URL. Not a secret: identity-based auth (UserAssignedIdentity) is what
+// actually grants access, via the Storage Blob Data Contributor role
+// assignment in that module.
+output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 // Deliberately NOT outputting a connection string here (previously behind a
 // linter-suppressed `outputs-should-not-contain-secrets`). Module outputs
 // land in the deployment's activity log/history, so a secret output is a

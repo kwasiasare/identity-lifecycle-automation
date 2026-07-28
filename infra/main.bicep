@@ -5,7 +5,9 @@
 //   - a storage account (queue intake, blob CSV drop, idempotency table)
 //   - a Log Analytics workspace + custom audit table + DCE/DCR
 //   - workspace-based Application Insights
-//   - a Consumption-plan Linux Python Function App
+//   - a Flex Consumption (FC1) Linux Python Function App (the subscription
+//     has zero quota for classic Y1 Consumption serverfarms — see
+//     infra/modules/function-app.bicep header for details)
 //
 // Dev/prod are two deployments of the same template with different
 // parameter files (infra/parameters/dev.bicepparam, prod.bicepparam) and
@@ -113,7 +115,9 @@ module functionApp 'modules/function-app.bicep' = {
     environmentName: environmentName
     managedIdentityId: identity.outputs.id
     managedIdentityClientId: identity.outputs.clientId
+    managedIdentityPrincipalId: identity.outputs.principalId
     storageAccountName: storage.outputs.name
+    storageBlobEndpoint: storage.outputs.blobEndpoint
     appInsightsConnectionString: appInsights.outputs.connectionString
     logsIngestionEndpoint: logAnalytics.outputs.dceEndpoint
     dcrImmutableId: logAnalytics.outputs.dcrImmutableId

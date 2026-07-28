@@ -28,7 +28,7 @@ flowchart LR
     Q --> QP[queue_processor]
     QP -.exhausted retries.-> Poison[events_poison_queue]
 
-    subgraph "Azure Function App (Consumption, Python 3.11)"
+    subgraph "Azure Function App (Flex Consumption, Python 3.11)"
         HTTP
         Blob
         QP
@@ -51,6 +51,17 @@ flowchart LR
     UAMI([User-Assigned Managed Identity]) -.auth.-> Graph
     UAMI -.auth.-> DCR
 ```
+
+> **Known gap on Flex Consumption (tracked, not yet fixed):** `blob_intake`
+> currently uses the classic polling Blob Storage trigger. Flex Consumption
+> only supports the **Event Grid** blob trigger source — the polling trigger
+> deploys without error but never fires. Until `function_app.py`'s
+> `blob_intake` is converted to `source=func.BlobSource.EVENT_GRID` and a
+> matching Event Grid system topic + subscription is added to
+> `infra/modules/storage.bicep`, treat CSV-drop intake as non-functional and
+> use `http_intake` instead. `http_intake`, `queue_processor`,
+> `events_poison_queue`, and `deferred_deletion_sweep` are unaffected (queue
+> and timer triggers are fully supported on Flex Consumption).
 
 **Design choices worth calling out:**
 
@@ -213,7 +224,7 @@ Trigger: a termination event.
    This isolation exists because EXO mailbox operations need the
    `ExchangeOnlineManagement` PowerShell module and an Exchange
    Administrator-scoped identity — not something worth plumbing a second auth
-   path for in a Python Consumption Function App for v1.
+   path for in a Python Azure Function for v1.
 6. Compute a deferred-deletion due date
    (`last_day_of_work + LEAVER_DEFERRED_DELETE_DAYS`, default 30) and persist
    it durably to the `LeaverSchedule` Table Storage ledger
@@ -550,5 +561,9 @@ done, and requiring tenant/subscription access this build didn't have:
 6. **End-to-end demo run** on the dev tenant: submit the `samples/` payloads
    through `http_intake`, confirm Graph state changes and the audit trail in
    Log Analytics, record a demo (EP-13's remaining acceptance criterion).
-7. **Approve dev -> master PR** once dev is manually tested, per the standard
+7. **Convert `blob_intake` to the Event Grid trigger source** (see the "Known
+   gap on Flex Consumption" callout under Architecture above) — required
+   before CSV-drop intake is usable; not required for `http_intake` or the
+   rest of the pipeline.
+8. **Approve dev -> master PR** once dev is manually tested, per the standard
    workflow.

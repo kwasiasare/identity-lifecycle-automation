@@ -168,12 +168,52 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Wait for RBAC propagation
+        # The Flex Consumption deployment storage role assignment (Storage
+        # Blob Data Contributor on the deployment package container, granted
+        # to the function's managed identity — infra/modules/function-app.bicep)
+        # was just created in the deployment above. Entra role assignments
+        # can take up to a couple of minutes to propagate; the code-deploy
+        # step immediately below needs that identity's access to already be
+        # effective. A short fixed wait is cheaper and less flaky than
+        # threading a poll/retry loop through a third-party action.
+        run: sleep 90
+
       - name: Deploy function code
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ steps.infra.outputs.function_app_name }}
           package: "."
-          scm-do-build-during-deployment: true
+          remote-build: true
+
+      - name: Smoke check — function app is up and functions registered
+        # Catches the class of failure a green "deploy" step doesn't: the
+        # site failing to start, the Python worker failing to initialize, or
+        # (see README "Known gap on Flex Consumption") a trigger silently
+        # failing to bind. Not exhaustive — doesn't invoke any function —
+        # but confirms the runtime came up and every declared function
+        # registered, before calling this deploy done.
+        run: |
+          app_name="${{ steps.infra.outputs.function_app_name }}"
+          rg="${{ vars.AZURE_RESOURCE_GROUP }}"
+          expected="http_intake blob_intake queue_processor events_poison_queue deferred_deletion_sweep"
+          registered=""
+          for attempt in 1 2 3 4 5 6; do
+            registered=$(az functionapp function list --name "$app_name" --resource-group "$rg" --query "[].name" -o tsv || true)
+            missing=0
+            for fn in $expected; do
+              echo "$registered" | grep -qx "$fn" || missing=1
+            done
+            if [ "$missing" -eq 0 ] && [ -n "$registered" ]; then
+              echo "All expected functions registered:"
+              echo "$registered"
+              exit 0
+            fi
+            echo "Attempt $attempt: not all functions registered yet, retrying in 20s..."
+            sleep 20
+          done
+          echo "::error::Timed out waiting for all functions to register on $app_name. Found: $registered"
+          exit 1
 
   deploy-prod:
     name: Deploy infra + code (production)
@@ -243,9 +283,39 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Wait for RBAC propagation
+        # See the matching step in deploy-dev above: the Flex Consumption
+        # deployment-storage role assignment was just created by the
+        # deployment above and needs a moment to propagate before the
+        # code-deploy step relies on it.
+        run: sleep 90
+
       - name: Deploy function code
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ steps.infra.outputs.function_app_name }}
           package: "."
-          scm-do-build-during-deployment: true
+          remote-build: true
+
+      - name: Smoke check — function app is up and functions registered
+        run: |
+          app_name="${{ steps.infra.outputs.function_app_name }}"
+          rg="${{ vars.AZURE_RESOURCE_GROUP }}"
+          expected="http_intake blob_intake queue_processor events_poison_queue deferred_deletion_sweep"
+          registered=""
+          for attempt in 1 2 3 4 5 6; do
+            registered=$(az functionapp function list --name "$app_name" --resource-group "$rg" --query "[].name" -o tsv || true)
+            missing=0
+            for fn in $expected; do
+              echo "$registered" | grep -qx "$fn" || missing=1
+            done
+            if [ "$missing" -eq 0 ] && [ -n "$registered" ]; then
+              echo "All expected functions registered:"
+              echo "$registered"
+              exit 0
+            fi
+            echo "Attempt $attempt: not all functions registered yet, retrying in 20s..."
+            sleep 20
+          done
+          echo "::error::Timed out waiting for all functions to register on $app_name. Found: $registered"
+          exit 1

@@ -152,6 +152,13 @@ def build_intake_response(batch: ParsedBatch) -> tuple[int, dict]:
 
 
 @app.function_name(name="blob_intake")
+# KNOWN GAP (tracked in README.md "Remaining TODOs"): this is the classic
+# polling Blob Storage trigger. The app now deploys on Flex Consumption
+# (infra/modules/function-app.bicep), which supports only the Event Grid blob
+# trigger source — this polling trigger deploys without error but never
+# fires. Fix: add `source=func.BlobSource.EVENT_GRID` here and wire an Event
+# Grid system topic + subscription onto the storage account in
+# infra/modules/storage.bicep. Until then, use http_intake for live intake.
 @app.blob_trigger(
     arg_name="blob",
     path="%INBOUND_CONTAINER_NAME%/{name}",
