@@ -21,14 +21,18 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import httpx
-from azure.core.credentials import TokenCredential
-from azure.identity import DefaultAzureCredential
 
 from identity_lifecycle.config import Settings
+
+if TYPE_CHECKING:
+    # Type-only: `from __future__ import annotations` (above) makes every
+    # annotation in this module a string, so this import never actually runs
+    # at module-import time — it exists purely for static type checkers.
+    from azure.core.credentials import TokenCredential
 
 logger = logging.getLogger("identity_lifecycle.graph_client")
 
@@ -93,7 +97,24 @@ class GraphClient:
         sleep_func: Any = None,
     ) -> None:
         self._settings = settings
-        self._credential = credential or DefaultAzureCredential()
+        if credential is None:
+            # Lazy import: azure-identity pulls in cryptography/msal, the
+            # heaviest branch of this app's dependency graph. Importing it
+            # only when a GraphClient is actually constructed (i.e. inside a
+            # trigger invocation) rather than at module load keeps
+            # function_app.py's own top-level import graph light, since
+            # every trigger in function_app.py imports GraphClient
+            # transitively (directly or via identity_lifecycle.flows.*) and
+            # that import graph is exactly what Flex Consumption's function
+            # indexing has to load. See README "Known gap on Flex
+            # Consumption" / CI history for the indexing symptom this is
+            # hedging against, and
+            # https://learn.microsoft.com/azure/azure-functions/python-build-options
+            # ("reduce top-level imports or use lazy imports").
+            from azure.identity import DefaultAzureCredential
+
+            credential = DefaultAzureCredential()
+        self._credential = credential
         self._http = http_client or httpx.Client(timeout=settings.graph_request_timeout_seconds)
         self._owns_http = http_client is None
         self._sleep = sleep_func or time.sleep

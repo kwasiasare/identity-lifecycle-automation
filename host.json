@@ -21,5 +21,6 @@
       "newBatchThreshold": 4
     }
   },
-  "functionTimeout": "00:05:00"
+  "functionTimeout": "00:05:00",
+  "metadataProviderTimeout": "00:02:00"
 }
